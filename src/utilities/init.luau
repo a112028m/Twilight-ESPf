@@ -17,9 +17,13 @@ function functions:GetTracerOrigin(root)
 		return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 	elseif origin == 5 then
 		return UserInputService:GetMouseLocation()
-	elseif origin == 1 and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-		local v3 = Camera:WorldToViewportPoint(LocalPlayer.Character.HumanoidRootPart.Position)
-		return Vector2.new(v3.X, v3.Y)
+	elseif origin == 1 then
+		local character = LocalPlayer.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root then
+			local v3 = Camera:WorldToViewportPoint(root.Position)
+			return Vector2.new(v3.X, v3.Y)
+		end
 	else
 		return Vector2.new(0, 0)
 	end
