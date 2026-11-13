@@ -769,6 +769,210 @@ do
     end
 
     ---------------------------------------------------------------------
+    -- 8. Simple UI API
+    ---------------------------------------------------------------------
+    local PLAYER_TEAMS = { "enemy", "friendly", "generic" } -- your own "local" ESP stays off
+    local PLAYER_FEATURES = { Chams = true, Box = true, HealthBar = true, Name = true, Tracer = true, Distance = true, Skeleton = true }
+    local MONSTER_FEATURES = { Chams = true, Box = true, HealthBar = true, Name = true, Tracer = true, Distance = true }
+
+    -- the per-target switches are created the first time they're needed, starting from your current settings
+    local function ensure()
+        local s = Lib.Settings
+        local box = s.Box
+        if type(box.Enabled) ~= "table" then
+            local on = box.Enabled == true
+            box.Enabled = { enemy = on, friendly = on, generic = on, ["local"] = on, Objects = on }
+        end
+        if box.Enabled.Objects == nil then box.Enabled.Objects = box.Enabled.generic == true end
+        if type(box.Style) ~= "table" then
+            local style = box.Style or 1
+            box.Style = { Players = style, Objects = style }
+        end
+        for _, feature in ipairs({ "Chams", "Name", "Tracer", "HealthBar", "Distance" }) do
+            local enabled = s[feature].Enabled
+            if enabled.Objects == nil then enabled.Objects = enabled.generic == true end
+        end
+    end
+
+    local function both(item, c) item.Visible = c item.Invisible = c end
+
+    function Lib:SetPlayers(feature, value)
+        if not PLAYER_FEATURES[feature] then
+            warn("[Twilight] SetPlayers: unknown feature '" .. tostring(feature) .. "'")
+            return false
+        end
+        ensure()
+        value = value and true or false
+        local enabled = Lib.Settings[feature].Enabled
+        for _, team in ipairs(PLAYER_TEAMS) do enabled[team] = value end
+        if feature == "HealthBar" and value then
+            Lib.Settings.HealthBar.Bar = true
+            Lib.Settings.HealthBar.Text = true
+        end
+        return true
+    end
+
+    function Lib:SetMonsters(feature, value)
+        if not MONSTER_FEATURES[feature] then
+            warn("[Twilight] SetMonsters: unknown feature '" .. tostring(feature) .. "'")
+            return false
+        end
+        ensure()
+        value = value and true or false
+        Lib.Settings[feature].Enabled.Objects = value
+        if feature == "HealthBar" and value then
+            Lib.Settings.HealthBar.Bar = true
+            Lib.Settings.HealthBar.Text = true
+        end
+        return true
+    end
+
+    function Lib:SetBoxStyle(who, style) -- who: "Players" | "Monsters"; style: "Normal" | "CornerBoxes" | "3D"
+        ensure()
+        local value = type(style) == "number" and style or Lib.Enums.BoxStyle[style]
+        if not value then
+            warn("[Twilight] SetBoxStyle: unknown style '" .. tostring(style) .. "'")
+            return false
+        end
+        if who == "Players" then
+            Lib.Settings.Box.Style.Players = value
+        elseif who == "Monsters" then
+            Lib.Settings.Box.Style.Objects = value
+        else
+            warn("[Twilight] SetBoxStyle: who must be \"Players\" or \"Monsters\"")
+            return false
+        end
+        return true
+    end
+
+    local function setHealth(container, level, color)
+        container.HealthBar = container.HealthBar or {}
+        local bar = container.HealthBar
+        if level == "Outline" then
+            bar.Outline = color
+        elseif level == "High" or level == "Medium" or level == "Low" then
+            bar.Fills = bar.Fills or {}
+            bar.Fills[level] = color
+        else
+            warn("[Twilight] SetColor: for Health, level must be \"High\", \"Medium\", \"Low\" or \"Outline\"")
+            return false
+        end
+        return true
+    end
+
+    local specific = {} -- [lowercase player name] = colors
+    local function nameKey(target)
+        if typeof(target) == "Instance" then return string.lower(target.Name) end
+        return string.lower(tostring(target))
+    end
+
+    -- Lib:SetColor(target, slot, color, level)
+    --   target: "Players", "Monsters", or a player (name or Player) for a specific player
+    --   slot:   "Box" "Chams" "Names" "Distance" "Tracer" "Skeleton" "Health"
+    --   level:  only for "Health": "High" "Medium" "Low" "Outline"
+    function Lib:SetColor(target, slot, color, level)
+        if typeof(color) ~= "Color3" then
+            warn("[Twilight] SetColor: color must be a Color3")
+            return false
+        end
+
+        if target == "Players" then
+            local ok = true
+            for _, team in ipairs(PLAYER_TEAMS) do
+                local s = Lib.Settings.currentColors[team]
+                if slot == "Box" then both(s.Box.Outline, color) both(s.Box.Fill, color)
+                elseif slot == "Chams" then both(s.Chams.Outline, color) both(s.Chams.Fill, color)
+                elseif slot == "Names" then s.Text = color
+                elseif slot == "Distance" then s.Distance = color
+                elseif slot == "Tracer" then both(s.Tracer, color)
+                elseif slot == "Skeleton" then both(s.Skeleton, color)
+                elseif slot == "Health" then ok = setHealth(s, level, color)
+                else
+                    warn("[Twilight] SetColor: unknown slot '" .. tostring(slot) .. "'")
+                    return false
+                end
+            end
+            return ok
+        end
+
+        if target == "Monsters" then
+            local o = Lib.ObjectColors
+            if slot == "Box" or slot == "Chams" or slot == "Tracer" or slot == "Distance" then
+                o[slot] = color
+            elseif slot == "Names" then
+                o.Text = color
+            elseif slot == "Health" then
+                return setHealth(o, level, color)
+            else
+                warn("[Twilight] SetColor: unknown slot '" .. tostring(slot) .. "'")
+                return false
+            end
+            return true
+        end
+
+        -- a specific player
+        if target == nil then
+            warn("[Twilight] SetColor: no player selected")
+            return false
+        end
+        if typeof(target) == "Instance" and not target:IsA("Player") then
+            warn("[Twilight] SetColor: for NPCs use \"Monsters\", Groups or Mark")
+            return false
+        end
+
+        local key = nameKey(target)
+        local set = specific[key] or {}
+        if slot == "Box" or slot == "Chams" or slot == "Tracer" or slot == "Distance" or slot == "Skeleton" then
+            set[slot] = color
+        elseif slot == "Names" then
+            set.Text = color
+        elseif slot == "Health" then
+            if not setHealth(set, level, color) then return false end
+        else
+            warn("[Twilight] SetColor: unknown slot '" .. tostring(slot) .. "'")
+            return false
+        end
+        specific[key] = set
+
+        local player = resolveTarget(target)
+        if player then
+            local entry = marks[player]
+            if not entry or entry.colors ~= set then Lib:Mark(player, set, "Forever") end
+        end
+        return true
+    end
+
+    -- Lib:ClearColor(player)        removes all of that player's colors
+    -- Lib:ClearColor(player, slot)  removes one slot ("Box", "Names", "Health", ...)
+    function Lib:ClearColor(target, slot)
+        local key = nameKey(target)
+        local set = specific[key]
+        if not set then return false end
+        if slot == nil then
+            specific[key] = nil
+            local player = resolveTarget(target)
+            if player then Lib:Unmark(player) end
+        elseif slot == "Names" then
+            set.Text = nil
+        elseif slot == "Health" then
+            set.HealthBar = nil
+        else
+            set[slot] = nil
+        end
+        return true
+    end
+
+    -- specific-player colors come back when that player rejoins
+    table.insert(Lib._connections, Players.PlayerAdded:Connect(function(p)
+        task.wait(1)
+        for key, set in pairs(specific) do
+            if string.lower(p.Name) == key or string.lower(p.DisplayName) == key then
+                Lib:Mark(p, set, "Forever")
+            end
+        end
+    end))
+
+    ---------------------------------------------------------------------
     local originalUnload = Lib.Unload
     function Lib:Unload()
         local store = Lib.ObjectESPs
